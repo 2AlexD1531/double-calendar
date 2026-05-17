@@ -17,7 +17,7 @@ public class YandexCalendarConfig {
 
     // Настройки синхронизации
     private int syncLookbackMonths = 3;
-    private int syncLookaheadWeeks = 4;
+    private int syncLookaheadMonths = 4;
 
     // Настройки подключения
     private int connectTimeoutSeconds = 15;
