@@ -2,7 +2,6 @@ package com.doubleCalendar.calendar;
 
 import com.doubleCalendar.config.Calendar2Config;
 import com.doubleCalendar.config.YandexCalendarConfig;
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
@@ -29,25 +28,57 @@ public class YandexCalendarService {
     private final YandexCalendarConfig config;
     private final Calendar2Config calendar2Config;
 
-    private String calendar1Url;
-    private String calendar2Url;
     private static final DateTimeFormatter ALL_DAY_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final DateTimeFormatter DATE_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss");
     private static final DateTimeFormatter DATE_TIME_UTC_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
     private static final int MAX_RETRIES = 3;
     private static final long RETRY_DELAY_MS = 1000;
 
-    @PostConstruct
-    public void init() {
-        log.info("Инициализация сервиса синхронизации календарей");
+    private Map<String, String> uidMapping = new HashMap<>();
+    private volatile String lastSyncInfo = null;
 
-        calendar1Url = buildCalendarUrl(config.getUrl(), config.getUsername(), config.getCalendarName());
-        log.info("Calendar 1 URL: {}", calendar1Url);
+    /**
+     * Инициализация и проверка подключения
+     */
+    public boolean initialize() {
+        try {
+            log.info("Проверка подключения к календарям...");
 
-        calendar2Url = buildCalendarUrl(calendar2Config.getUrl(), calendar2Config.getUsername(), calendar2Config.getCalendarName());
-        log.info("Calendar 2 URL: {}", calendar2Url);
+            String url1 = getCalendar1Url();
+            String url2 = getCalendar2Url();
 
-        syncCalendars();
+            log.info("URL календаря 1: {}", url1);
+            log.info("URL календаря 2: {}", url2);
+
+            if (url1 == null || url2 == null) {
+                log.error("❌ URL календарей не заданы");
+                return false;
+            }
+
+            List<CalendarEventData> events1 = getAllEventsFromCalendar1();
+            List<CalendarEventData> events2 = getAllEventsFromCalendar2();
+
+            log.info("✅ Подключение успешно. Календарь 1: {} событий, Календарь 2: {} событий",
+                    events1.size(), events2.size());
+            return true;
+        } catch (Exception e) {
+            log.error("❌ Ошибка подключения: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    private String getCalendar1Url() {
+        if (config.getUrl() == null || config.getUrl().isEmpty()) return null;
+        if (config.getUsername() == null || config.getUsername().isEmpty()) return null;
+        if (config.getCalendarName() == null || config.getCalendarName().isEmpty()) return null;
+        return buildCalendarUrl(config.getUrl(), config.getUsername(), config.getCalendarName());
+    }
+
+    private String getCalendar2Url() {
+        if (calendar2Config.getUrl() == null || calendar2Config.getUrl().isEmpty()) return null;
+        if (calendar2Config.getUsername() == null || calendar2Config.getUsername().isEmpty()) return null;
+        if (calendar2Config.getCalendarName() == null || calendar2Config.getCalendarName().isEmpty()) return null;
+        return buildCalendarUrl(calendar2Config.getUrl(), calendar2Config.getUsername(), calendar2Config.getCalendarName());
     }
 
     private String buildCalendarUrl(String baseUrl, String username, String calendarName) {
@@ -80,25 +111,17 @@ public class YandexCalendarService {
 
             if (eventsFromCalendar1.isEmpty()) {
                 log.info("Нет событий для синхронизации");
+                updateLastSyncInfo(0, 0, 0);
                 return;
-            }
-
-            // Логируем все события из календаря 1
-            for (CalendarEventData event : eventsFromCalendar1) {
-                log.info("Календарь 1 - Событие: uid={}, summary={}, start={}, end={}, allDay={}",
-                        event.getUid(), event.getSummary(), event.getStart(), event.getEnd(), event.isAllDay());
             }
 
             List<CalendarEventData> eventsFromCalendar2 = getAllEventsFromCalendar2();
             log.info("Получено {} событий из календаря 2", eventsFromCalendar2.size());
 
-            // Создаём множество SUMMARY существующих событий для проверки дубликатов
             Set<String> existingSummaries = new HashSet<>();
-            Map<String, String> existingUidBySummary = new HashMap<>();
             for (CalendarEventData event : eventsFromCalendar2) {
                 if (event.getSummary() != null && !event.getSummary().isEmpty()) {
                     existingSummaries.add(event.getSummary());
-                    existingUidBySummary.put(event.getSummary(), event.getUid());
                 }
             }
             log.info("Существующих событий в календаре 2: {}", existingSummaries.size());
@@ -106,37 +129,30 @@ public class YandexCalendarService {
             int createdCount = 0;
             int skippedCount = 0;
 
-            // ТОЛЬКО создаём новые события с НОВЫМИ UID
             for (CalendarEventData sourceEvent : eventsFromCalendar1) {
                 String summary = sourceEvent.getSummary();
                 if (summary == null || summary.isEmpty()) {
-                    log.warn("Пропуск события без SUMMARY");
                     continue;
                 }
 
-                // Проверяем, существует ли уже событие с таким же SUMMARY в календаре 2
                 if (existingSummaries.contains(summary)) {
-                    log.debug("Событие уже существует в календаре 2: {}", summary);
                     skippedCount++;
                     continue;
                 }
 
-                // Создаём копию с НОВЫМ UID
-                log.info("Создание копии: {} (allDay={}, start={}, end={})",
-                        summary, sourceEvent.isAllDay(), sourceEvent.getStart(), sourceEvent.getEnd());
-
                 if (createShortEventInCalendar2(sourceEvent)) {
                     createdCount++;
-                    log.info("✓ Создано: {}", summary);
-                } else {
-                    log.error("✗ Не удалось создать: {}", summary);
                 }
 
-                Thread.sleep(100);
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
             }
 
-            log.info("Синхронизация завершена. Создано: {}, Пропущено (уже существуют): {}",
-                    createdCount, skippedCount);
+            log.info("Синхронизация завершена. Создано: {}, Пропущено: {}", createdCount, skippedCount);
+            updateLastSyncInfo(createdCount, 0, skippedCount);
 
         } catch (Exception e) {
             log.error("Ошибка при синхронизации календарей: {}", e.getMessage(), e);
@@ -146,20 +162,20 @@ public class YandexCalendarService {
     }
 
     private boolean createShortEventInCalendar2(CalendarEventData sourceEvent) {
-        // Генерируем НОВЫЙ уникальный UID для копии
         String newUid = UUID.randomUUID().toString() + "@double-calendar-sync";
+        String calendar2Url = getCalendar2Url();
 
-        log.info("Создание копии с НОВЫМ UID: {} (оригинальный: {})", newUid, sourceEvent.getUid());
+        if (calendar2Url == null) {
+            log.error("URL календаря 2 не задан");
+            return false;
+        }
 
         for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
             try {
                 String shortSummary = buildShortSummary(sourceEvent.getSummary());
                 boolean isAllDay = sourceEvent.isAllDay();
-
                 String icsContent = buildShortIcsContent(newUid, shortSummary, sourceEvent.getStart(), sourceEvent.getEnd(), isAllDay);
                 String eventUrl = calendar2Url + "/" + newUid + ".ics";
-
-                log.debug("PUT {} \n{}", eventUrl, icsContent);
 
                 ResponseEntity<Void> response = restClient.put()
                         .uri(eventUrl)
@@ -171,20 +187,13 @@ public class YandexCalendarService {
                 if (response.getStatusCode().is2xxSuccessful() ||
                         response.getStatusCode() == HttpStatus.CREATED ||
                         response.getStatusCode() == HttpStatus.NO_CONTENT) {
-                    log.info("✓ Копия создана (попытка {}): {} (новый UID: {})", attempt + 1, shortSummary, newUid);
                     return true;
-                } else {
-                    log.warn("Неожиданный статус при создании (попытка {}): {}", attempt + 1, response.getStatusCode());
                 }
-
             } catch (RestClientException e) {
                 log.warn("Ошибка создания (попытка {}): {}", attempt + 1, e.getMessage());
-
                 if (attempt < MAX_RETRIES - 1) {
                     try {
-                        long delay = RETRY_DELAY_MS * (attempt + 1);
-                        log.info("Повторная попытка через {} мс...", delay);
-                        Thread.sleep(delay);
+                        Thread.sleep(RETRY_DELAY_MS * (attempt + 1));
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         return false;
@@ -195,9 +204,6 @@ public class YandexCalendarService {
         return false;
     }
 
-
-
-
     private String buildShortSummary(String originalSummary) {
         if (originalSummary == null || originalSummary.isEmpty()) {
             return "Без названия";
@@ -206,12 +212,16 @@ public class YandexCalendarService {
     }
 
     public List<CalendarEventData> getAllEventsFromCalendar1() {
-        return fetchEvents(calendar1Url, config.getUsername(), config.getPassword(),
+        String url = getCalendar1Url();
+        if (url == null) return new ArrayList<>();
+        return fetchEvents(url, config.getUsername(), config.getPassword(),
                 config.getSyncLookbackMonths(), config.getSyncLookaheadMonths());
     }
 
     private List<CalendarEventData> getAllEventsFromCalendar2() {
-        return fetchEvents(calendar2Url, calendar2Config.getUsername(), calendar2Config.getPassword(),
+        String url = getCalendar2Url();
+        if (url == null) return new ArrayList<>();
+        return fetchEvents(url, calendar2Config.getUsername(), calendar2Config.getPassword(),
                 config.getSyncLookbackMonths(), config.getSyncLookaheadMonths());
     }
 
@@ -222,10 +232,7 @@ public class YandexCalendarService {
                 LocalDateTime now = LocalDateTime.now(ZoneId.of("UTC"));
                 String startStr = now.minusMonths(lookbackMonths).format(DATE_TIME_UTC_FORMAT);
                 String endStr = now.plusMonths(lookaheadMonths).format(DATE_TIME_UTC_FORMAT);
-
                 String reportBody = buildReportXml(startStr, endStr);
-
-                log.debug("Запрос событий с {} по {} (попытка {})", startStr, endStr, attempt + 1);
 
                 ResponseEntity<String> response = restClient.method(HttpMethod.valueOf("REPORT"))
                         .uri(calendarUrl)
@@ -235,15 +242,10 @@ public class YandexCalendarService {
                         .toEntity(String.class);
 
                 if (response.getStatusCode().is2xxSuccessful() || response.getStatusCode().value() == 207) {
-                    List<CalendarEventData> events = parseEvents(response.getBody());
-                    log.debug("Получено {} событий из {}", events.size(), calendarUrl);
-                    return events;
-                } else {
-                    log.warn("Неожиданный статус ответа: {} (попытка {})", response.getStatusCode(), attempt + 1);
+                    return parseEvents(response.getBody());
                 }
             } catch (Exception e) {
                 log.error("Ошибка получения событий из {} (попытка {}): {}", calendarUrl, attempt + 1, e.getMessage());
-
                 if (attempt < MAX_RETRIES - 1) {
                     try {
                         Thread.sleep(RETRY_DELAY_MS * (attempt + 1));
@@ -255,7 +257,6 @@ public class YandexCalendarService {
         }
         return new ArrayList<>();
     }
-
 
     private String buildShortIcsContent(String uid, String summary, LocalDateTime start, LocalDateTime end, boolean isAllDay) {
         DateTimeFormatter utcFormatter = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
@@ -272,39 +273,19 @@ public class YandexCalendarService {
         ics.append("DTSTAMP:").append(nowUtc.format(utcFormatter)).append("\r\n");
 
         if (isAllDay && start != null) {
-            // Цельнодневное событие
             LocalDate startDate = start.toLocalDate();
             ics.append("DTSTART;VALUE=DATE:").append(startDate.format(ALL_DAY_FORMAT)).append("\r\n");
-
             if (end != null) {
-                LocalDate endDate = end.toLocalDate();
-                // В iCal для цельнодневных событий DTEND - это следующий день после окончания
-                ics.append("DTEND;VALUE=DATE:").append(endDate.format(ALL_DAY_FORMAT)).append("\r\n");
+                ics.append("DTEND;VALUE=DATE:").append(end.toLocalDate().format(ALL_DAY_FORMAT)).append("\r\n");
             } else {
-                // Если нет даты окончания, добавляем следующий день
                 ics.append("DTEND;VALUE=DATE:").append(startDate.plusDays(1).format(ALL_DAY_FORMAT)).append("\r\n");
             }
-
-            log.debug("Цельнодневное событие: {} - {}", startDate, end != null ? end.toLocalDate() : startDate.plusDays(1));
-
         } else if (start != null) {
-            // Обычное событие с временем
             LocalDateTime startUtc = start.minusHours(3);
-            LocalDateTime endUtc;
-            if (end != null) {
-                endUtc = end.minusHours(3);
-            } else {
-                endUtc = startUtc.plusHours(1);
-            }
-
+            LocalDateTime endUtc = (end != null) ? end.minusHours(3) : startUtc.plusHours(1);
             ics.append("DTSTART:").append(startUtc.format(utcFormatter)).append("\r\n");
             ics.append("DTEND:").append(endUtc.format(utcFormatter)).append("\r\n");
-
-            log.debug("Событие с временем: {} - {}", startUtc, endUtc);
-
         } else {
-            // Защита: если даты нет, создаём на сегодня
-            log.warn("Нет даты для события {}. Использую сегодняшнюю дату.", uid);
             LocalDate today = LocalDate.now();
             ics.append("DTSTART;VALUE=DATE:").append(today.format(ALL_DAY_FORMAT)).append("\r\n");
             ics.append("DTEND;VALUE=DATE:").append(today.plusDays(1).format(ALL_DAY_FORMAT)).append("\r\n");
@@ -334,10 +315,7 @@ public class YandexCalendarService {
 
     private List<CalendarEventData> parseEvents(String responseBody) {
         List<CalendarEventData> events = new ArrayList<>();
-
-        if (responseBody == null || responseBody.isEmpty()) {
-            return events;
-        }
+        if (responseBody == null || responseBody.isEmpty()) return events;
 
         Pattern veventPattern = Pattern.compile("BEGIN:VEVENT(.*?)END:VEVENT", Pattern.DOTALL);
         Matcher matcher = veventPattern.matcher(responseBody);
@@ -349,8 +327,6 @@ public class YandexCalendarService {
                 events.add(event);
             }
         }
-
-        log.debug("Распарсено {} событий", events.size());
         return events;
     }
 
@@ -358,21 +334,13 @@ public class YandexCalendarService {
         try {
             String uid = extractField(vevent, "UID");
             String summary = extractField(vevent, "SUMMARY");
-
             String dtstartRaw = extractField(vevent, "DTSTART");
             String dtendRaw = extractField(vevent, "DTEND");
 
-            log.debug("Парсинг VEVENT: uid={}, summary={}, DTSTART={}, DTEND={}",
-                    uid, summary, dtstartRaw, dtendRaw);
-
             boolean isAllDay = false;
-
-            // Проверяем, является ли событие цельнодневным
             if (dtstartRaw != null && dtstartRaw.contains("VALUE=DATE")) {
                 isAllDay = true;
             }
-
-            // Также проверяем по формату даты (8 цифр без T)
             if (dtstartRaw != null) {
                 String cleanDate = dtstartRaw.replaceAll(".*:", "").trim();
                 if (cleanDate.matches("\\d{8}") && !cleanDate.contains("T")) {
@@ -383,8 +351,6 @@ public class YandexCalendarService {
             LocalDateTime start = parseICalDate(dtstartRaw, isAllDay);
             LocalDateTime end = parseICalDate(dtendRaw, isAllDay);
 
-            log.debug("Распарсено: start={}, end={}, allDay={}", start, end, isAllDay);
-
             return CalendarEventData.builder()
                     .start(start)
                     .end(end)
@@ -392,9 +358,8 @@ public class YandexCalendarService {
                     .uid(uid != null ? uid : "")
                     .allDay(isAllDay)
                     .build();
-
         } catch (Exception e) {
-            log.warn("Ошибка парсинга VEVENT: {}", e.getMessage(), e);
+            log.warn("Ошибка парсинга VEVENT: {}", e.getMessage());
             return null;
         }
     }
@@ -409,55 +374,36 @@ public class YandexCalendarService {
     }
 
     private LocalDateTime parseICalDate(String dateStr, boolean isAllDay) {
-        if (dateStr == null || dateStr.isEmpty()) {
-            return null;
-        }
+        if (dateStr == null || dateStr.isEmpty()) return null;
 
         try {
-            // Извлекаем чистую дату (после последнего двоеточия)
             String clean = dateStr;
             if (clean.contains(":")) {
                 clean = clean.substring(clean.lastIndexOf(":") + 1);
             }
-
-            // Удаляем все не-цифры, кроме T и Z
             clean = clean.replaceAll("[^\\dTZ]", "");
 
-            log.debug("Парсинг даты: raw='{}', clean='{}', allDay={}", dateStr, clean, isAllDay);
-
             if (isAllDay) {
-                // Цельнодневное событие: YYYYMMDD
                 if (clean.length() >= 8) {
                     String datePart = clean.substring(0, 8);
                     if (datePart.matches("\\d{8}")) {
-                        LocalDate date = LocalDate.parse(datePart, ALL_DAY_FORMAT);
-                        log.debug("Цельнодневная дата: {}", date);
-                        return date.atStartOfDay();
+                        return LocalDate.parse(datePart, ALL_DAY_FORMAT).atStartOfDay();
                     }
                 }
             } else {
-                // Событие с временем: YYYYMMDDTHHMMSS(Z)
                 if (clean.length() >= 15) {
                     String dateTimePart = clean.substring(0, 15);
                     if (dateTimePart.matches("\\d{8}T\\d{6}")) {
                         LocalDateTime dateTime = LocalDateTime.parse(dateTimePart, DATE_TIME_FORMAT);
-
-                        // Если время в UTC (есть Z), конвертируем в MSK (UTC+3)
                         if (clean.endsWith("Z")) {
                             dateTime = dateTime.plusHours(3);
-                            log.debug("UTC -> MSK: {} -> {}", dateTimePart, dateTime);
-                        } else {
-                            log.debug("Локальное время: {}", dateTime);
                         }
-
                         return dateTime;
                     }
                 }
             }
-
-            log.warn("Не удалось распарсить дату: raw='{}', clean='{}', длина={}", dateStr, clean, clean.length());
         } catch (Exception e) {
-            log.error("Ошибка парсинга даты '{}': {}", dateStr, e.getMessage(), e);
+            log.warn("Ошибка парсинга даты '{}': {}", dateStr, e.getMessage());
         }
         return null;
     }
@@ -470,5 +416,46 @@ public class YandexCalendarService {
                 .replace(",", "\\,")
                 .replace("\n", "\\n")
                 .replace("\r", "");
+    }
+
+    public CalendarStats getCalendarStats() {
+        try {
+            List<CalendarEventData> events = getAllEventsFromCalendar1();
+            LocalDateTime now = LocalDateTime.now();
+
+            int pastCount = 0, futureCount = 0, todayCount = 0;
+
+            for (CalendarEventData event : events) {
+                if (event.getStart() != null) {
+                    if (event.getStart().toLocalDate().equals(now.toLocalDate())) {
+                        todayCount++;
+                    } else if (event.getStart().isBefore(now)) {
+                        pastCount++;
+                    } else {
+                        futureCount++;
+                    }
+                }
+            }
+
+            return CalendarStats.builder()
+                    .totalEvents(events.size())
+                    .pastEvents(pastCount)
+                    .futureEvents(futureCount)
+                    .todayEvents(todayCount)
+                    .build();
+        } catch (Exception e) {
+            log.error("Ошибка получения статистики: {}", e.getMessage());
+            return CalendarStats.builder().totalEvents(0).pastEvents(0).futureEvents(0).todayEvents(0).build();
+        }
+    }
+
+    public String getLastSyncInfo() {
+        return lastSyncInfo;
+    }
+
+    private void updateLastSyncInfo(int created, int deleted, int skipped) {
+        lastSyncInfo = String.format("Последняя синхронизация: %s | Создано: %d, Удалено: %d, Пропущено: %d",
+                LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")),
+                created, deleted, skipped);
     }
 }
