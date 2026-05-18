@@ -1,4 +1,4 @@
-package com.doubleCalendar.controller;
+package com.doubleCalendar.calendar;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;

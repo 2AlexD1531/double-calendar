@@ -248,54 +248,6 @@ public class YandexCalendarService {
         return false;
     }
 
-    private boolean createShortEventInCalendar2(CalendarEventData sourceEvent) {
-        String newUid = UUID.randomUUID().toString() + "@double-calendar-sync";
-        String calendar2Url = getCalendar2Url();
-
-        if (calendar2Url == null) {
-            log.error("URL календаря 2 не задан");
-            return false;
-        }
-
-        for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
-            try {
-                String shortSummary = buildShortSummary(sourceEvent.getSummary());
-                boolean isAllDay = sourceEvent.isAllDay();
-                String icsContent = buildShortIcsContent(newUid, shortSummary, sourceEvent.getStart(), sourceEvent.getEnd(), isAllDay);
-                String eventUrl = calendar2Url + "/" + newUid + ".ics";
-
-                ResponseEntity<Void> response = restClient.put()
-                        .uri(eventUrl)
-                        .headers(h -> setCalendarHeaders(h, calendar2Config.getUsername(), calendar2Config.getPassword()))
-                        .body(icsContent)
-                        .retrieve()
-                        .toBodilessEntity();
-
-                if (response.getStatusCode().is2xxSuccessful() ||
-                        response.getStatusCode() == HttpStatus.CREATED ||
-                        response.getStatusCode() == HttpStatus.NO_CONTENT) {
-                    return true;
-                }
-            } catch (RestClientException e) {
-                String errorMsg = e.getMessage();
-                log.warn("Ошибка создания (попытка {}): {}", attempt + 1, errorMsg);
-
-                if (errorMsg != null && errorMsg.contains("409")) {
-                    return true; // Уже существует
-                }
-
-                if (attempt < MAX_RETRIES - 1) {
-                    try {
-                        Thread.sleep(RETRY_DELAY_MS * (attempt + 1));
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        return false;
-                    }
-                }
-            }
-        }
-        return false;
-    }
 
     // Упрощенный метод без originalUid
     private String buildShortIcsContent(String uid, String summary, LocalDateTime start, LocalDateTime end, boolean isAllDay) {
@@ -338,75 +290,6 @@ public class YandexCalendarService {
 
         return ics.toString();
     }
-
-    /**
-     * Добавляем оригинальный UID в DESCRIPTION для обратной связи
-     */
-    private String buildShortIcsContent(String uid, String summary, LocalDateTime start, LocalDateTime end,
-                                        boolean isAllDay, String originalUid) {
-        DateTimeFormatter utcFormatter = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
-        LocalDateTime nowUtc = LocalDateTime.now(ZoneOffset.UTC);
-
-        StringBuilder ics = new StringBuilder();
-        ics.append("BEGIN:VCALENDAR\r\n");
-        ics.append("VERSION:2.0\r\n");
-        ics.append("PRODID:-//Double Calendar Sync//RU\r\n");
-        ics.append("CALSCALE:GREGORIAN\r\n");
-        ics.append("METHOD:PUBLISH\r\n");
-        ics.append("BEGIN:VEVENT\r\n");
-        ics.append("UID:").append(uid).append("\r\n");
-        ics.append("DTSTAMP:").append(nowUtc.format(utcFormatter)).append("\r\n");
-
-        if (isAllDay && start != null) {
-            LocalDate startDate = start.toLocalDate();
-            ics.append("DTSTART;VALUE=DATE:").append(startDate.format(ALL_DAY_FORMAT)).append("\r\n");
-            if (end != null) {
-                ics.append("DTEND;VALUE=DATE:").append(end.toLocalDate().format(ALL_DAY_FORMAT)).append("\r\n");
-            } else {
-                ics.append("DTEND;VALUE=DATE:").append(startDate.plusDays(1).format(ALL_DAY_FORMAT)).append("\r\n");
-            }
-        } else if (start != null) {
-            LocalDateTime startUtc = start.minusHours(3);
-            LocalDateTime endUtc = (end != null) ? end.minusHours(3) : startUtc.plusHours(1);
-            ics.append("DTSTART:").append(startUtc.format(utcFormatter)).append("\r\n");
-            ics.append("DTEND:").append(endUtc.format(utcFormatter)).append("\r\n");
-        } else {
-            LocalDate today = LocalDate.now();
-            ics.append("DTSTART;VALUE=DATE:").append(today.format(ALL_DAY_FORMAT)).append("\r\n");
-            ics.append("DTEND;VALUE=DATE:").append(today.plusDays(1).format(ALL_DAY_FORMAT)).append("\r\n");
-        }
-
-        ics.append("SUMMARY:").append(escapeText(summary)).append("\r\n");
-        // Сохраняем оригинальный UID в DESCRIPTION
-        ics.append("DESCRIPTION:Original-UID:").append(originalUid).append("\r\n");
-        ics.append("TRANSP:TRANSPARENT\r\n");
-        ics.append("END:VEVENT\r\n");
-        ics.append("END:VCALENDAR\r\n");
-
-        return ics.toString();
-    }
-
-    /**
-     * Извлечение оригинального UID из DESCRIPTION
-     */
-    private String extractOriginalUidFromDescription(String description) {
-        if (description == null || description.isEmpty()) {
-            return null;
-        }
-
-        // Ищем "Original-UID:uuid"
-        Pattern pattern = Pattern.compile("Original-UID:([^\\s\\\\]+)");
-        Matcher matcher = pattern.matcher(description);
-        if (matcher.find()) {
-            String uid = matcher.group(1);
-            // Убираем escape-символы
-            uid = uid.replace("\\,", ",").replace("\\;", ";").replace("\\\\", "\\");
-            return uid;
-        }
-        return null;
-    }
-
-
 
     private String buildShortSummary(String originalSummary) {
         if (originalSummary == null || originalSummary.isEmpty()) {

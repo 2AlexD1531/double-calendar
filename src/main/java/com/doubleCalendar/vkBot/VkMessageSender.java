@@ -78,17 +78,4 @@ public class VkMessageSender {
         }
     }
 
-    /**
-     * Отправка сообщения с клавиатурой (альтернативный метод)
-     */
-    public void sendKeyboard(Integer peerId, String message, String keyboardJson) {
-        sendMessageWithKeyboard(peerId, message, keyboardJson);
-    }
-
-    /**
-     * Проверка инициализации
-     */
-    public boolean isInitialized() {
-        return vk != null && actor != null;
-    }
 }

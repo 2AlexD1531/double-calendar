@@ -203,9 +203,7 @@ public class VkCommandHandler {
         sendWithKeyboard(peerId, help, keyboardFactory.createHelpKeyboard());
     }
 
-    /**
-     * Начало многошаговой инициализации
-     */
+
     /**
      * Начало инициализации - ввод всех параметров одним сообщением
      */
@@ -348,7 +346,6 @@ public class VkCommandHandler {
     }
 
 
-
     /**
      * Подтверждение инициализации
      */
@@ -383,12 +380,5 @@ public class VkCommandHandler {
      */
     private void sendWithKeyboard(Integer peerId, String message, String keyboardJson) {
         messageSender.sendMessageWithKeyboard(peerId, message, keyboardJson);
-    }
-
-    /**
-     * Отправка простого сообщения
-     */
-    public void sendMessage(Integer peerId, String text) {
-        messageSender.sendMessage(peerId, text);
     }
 }
