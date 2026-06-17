@@ -1,0 +1,78 @@
+services:
+  double-calendar:
+
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    container_name: double-calendar
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
+    env_file:
+      - .env
+    environment:
+      SPRING_CONFIG_NAME: application-prod
+      SPRING_PROFILES_ACTIVE: prod
+      TZ: Europe/Moscow
+
+
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data  # Добавил для экспорта данных
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  vk-webhook:
+    build: ./webhook
+    container_name: vk-webhook
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:5000:5000"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5000/health" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+
+  gatus:
+    image: twinproduction/gatus:latest
+    container_name: gatus
+    restart: unless-stopped
+    command: >
+      sh -c "sleep 30 && /gatus"
+    env_file: ./.env
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - ./gatus/config.yml:/config/config.yml
+    environment:
+      GATUS_CONFIG_PATH: gatus/config/config.yml
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+networks:
+  default:  # Исправил: убрал кастомную сеть, оставил default
+    driver: bridge

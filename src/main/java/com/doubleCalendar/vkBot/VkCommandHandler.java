@@ -6,8 +6,10 @@ import com.vk.api.sdk.client.VkApiClient;
 import com.vk.api.sdk.client.actors.GroupActor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -23,8 +25,6 @@ public class VkCommandHandler {
     // Состояния пользователей для многошаговой инициализации
     private final Map<Integer, String> userState = new HashMap<>();
     private final Map<Integer, Map<String, String>> userInputData = new HashMap<>();
-
-
 
 
     public void initVkApi(VkApiClient vk, GroupActor actor) {
@@ -208,6 +208,11 @@ public class VkCommandHandler {
      * Начало инициализации - ввод всех параметров одним сообщением
      */
     private void startInit(Integer peerId) {
+
+        userState.clear();
+        userInputData.clear();
+
+
         userState.put(peerId, "init_all_params");
 
         String message = "🔧 Инициализация календарей\n\n" +

@@ -1,0 +1,8 @@
+.git
+*.log
+target/
+build/
+node_modules/
+*.iml
+.idea/
+test/

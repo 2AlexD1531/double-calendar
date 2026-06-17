@@ -34,7 +34,6 @@ public class YandexCalendarService {
     private static final int MAX_RETRIES = 3;
     private static final long RETRY_DELAY_MS = 1000;
 
-    private Map<String, String> uidMapping = new HashMap<>();
     private volatile String lastSyncInfo = null;
 
     /**

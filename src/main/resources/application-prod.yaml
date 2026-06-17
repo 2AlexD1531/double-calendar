@@ -1,0 +1,44 @@
+# application.yml
+spring:
+  application:
+    name: double-calendar
+
+# VK Bot конфигурация
+vk:
+  bot:
+    enabled: true                                    # Включен/выключен
+    accessToken:
+    groupId:                # ID сообщества
+    adminId:                     # ID администратора
+    confirmationCode:        # Код подтверждения
+    secretKey:              # Секретный ключ
+    apiVersion: "5.199"                              # Версия API
+    connectionTimeout: 30                            # Таймаут соединения
+    readTimeout: 30                                  # Таймаут чтения
+    maxButtonsPerRow: 4                            # Максимум кнопок в ряду
+    maxRows: 10                                      # Максимум рядов
+    logMessages: true                               # Логировать сообщения
+    autoSyncOnStartup: true
+
+# Календари (начальные значения - будут переопределены через VK)
+calendar:
+  yandex:
+    url: ${CALENDAR1_URL:}
+    username: ${CALENDAR1_USERNAME:}
+    password: ${CALENDAR1_PASSWORD:}
+    calendar-name: ${CALENDAR1_NAME:}
+    sync-lookback-months: 3
+    sync-lookahead-months: 3
+    cache-ttl-minutes: 5
+
+  calendar2:
+    url: ${CALENDAR2_URL:}
+    username: ${CALENDAR2_USERNAME:}
+    password: ${CALENDAR2_PASSWORD:}
+    calendar-name: ${CALENDAR2_NAME:}
+
+# Планировщик синхронизации
+scheduler:
+  sync:
+    enabled: true  # По умолчанию выключен
+    interval-ms: 60000  # 5 минут

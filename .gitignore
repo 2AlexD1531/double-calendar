@@ -45,4 +45,6 @@ src/main/resources/application.yaml
 src/main/resources/application2.yaml
 src/main/resources/application3.yaml
 src/main/resources/application-demo.yaml
+.env
+
 

@@ -1,0 +1,19 @@
+alerting:
+  custom:
+    url: "http://vk-webhook:5000/vk-alert"
+    method: POST
+
+    body: '{"message": "❌ Сервис бронирования УПАЛ! Проверь сервер."}'
+    headers:
+      Content-Type: "application/json"
+
+endpoints:
+  - name: "Trading Robot API"
+    url: "http://booking-app:8080/health"
+    interval: 20s
+    conditions:
+      - "[STATUS] == 200"
+    alerts:
+      - type: custom
+        enabled: true
+        send-on-resolved: false
