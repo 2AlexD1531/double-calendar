@@ -7,11 +7,11 @@ spring:
 vk:
   bot:
     enabled: true                                    # Включен/выключен
-    accessToken:
-    groupId:                # ID сообщества
-    adminId:                     # ID администратора
-    confirmationCode:        # Код подтверждения
-    secretKey:              # Секретный ключ
+    accessToken: ${VK_ADMIN_TOKEN}
+    groupId: ${VK_ADMIN_GROUP_ID}                       # ID сообщества
+    adminId: ${VK_ADMIN_ID}                        # ID администратора
+    confirmationCode: ${VK_ADMIN_CONFIRMATION_CODE}        # Код подтверждения
+    secretKey: ${VK_ADMIN_SECRET_KEY}
     apiVersion: "5.199"                              # Версия API
     connectionTimeout: 30                            # Таймаут соединения
     readTimeout: 30                                  # Таймаут чтения
