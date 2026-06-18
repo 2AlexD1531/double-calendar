@@ -9,7 +9,6 @@ vk:
     enabled: true                                    # Включен/выключен
     accessToken: ${VK_ADMIN_TOKEN}
     groupId: ${VK_ADMIN_GROUP_ID}                       # ID сообщества
-    adminId: ${VK_ADMIN_ID}                        # ID администратора
     confirmationCode: ${VK_ADMIN_CONFIRMATION_CODE}        # Код подтверждения
     secretKey: ${VK_ADMIN_SECRET_KEY}
     apiVersion: "5.199"                              # Версия API
