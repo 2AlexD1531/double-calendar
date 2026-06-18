@@ -33,7 +33,7 @@ public class VkBot {
             commandHandler.initVkApi(vk, actor);
             messageSender.initVkApi(vk, actor);
 
-            log.info("VK Bot инициализирован. Admin ID: {}", vkConfig.getAdminId());
+            log.info("VK Bot инициализирован.");
         } catch (Exception e) {
             log.error("Ошибка инициализации VK: {}", e.getMessage());
         }
@@ -48,13 +48,6 @@ public class VkBot {
             return;
         }
 
-        // Проверка прав администратора
-        if (vkConfig.getAdminId() != null && !peerId.equals(vkConfig.getAdminId())) {
-            log.warn("Сообщение от неадминистратора: peerId={}, adminId={}",
-                    peerId, vkConfig.getAdminId());
-            messageSender.sendMessage(peerId, "⛔ У вас нет доступа к админ-панели.");
-            return;
-        }
 
         log.info("✅ Команда администратора: peerId={}, text={}", peerId, text);
         commandHandler.handleCommand(peerId, text, messageId);

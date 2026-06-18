@@ -17,7 +17,6 @@ public class VkConfig {
     private boolean enabled = false;
     private String accessToken = "";
     private Integer groupId = 0;
-    private Integer adminId = 0;
     private String confirmationCode = "";
     private String secretKey = "";
     private String apiVersion = "5.199";
@@ -37,11 +36,10 @@ public class VkConfig {
         }
 
         boolean valid = accessToken != null && !accessToken.isEmpty() &&
-                groupId != null && groupId > 0 &&
-                adminId != null && adminId > 0;
+                groupId != null && groupId > 0;
 
         if (!valid) {
-            log.warn("VK Bot конфигурация невалидна. Проверьте accessToken, groupId, adminId");
+            log.warn("VK Bot конфигурация невалидна. Проверьте accessToken, groupId");
         }
 
         return valid;
