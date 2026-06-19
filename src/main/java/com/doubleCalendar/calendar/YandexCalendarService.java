@@ -199,7 +199,11 @@ public class YandexCalendarService {
     private String generateCopyUid(String originalUid) {
         // Добавляем суффикс к оригинальному UID
         // Например: original@yandex.ru -> original-copy@double-calendar-sync
-        return originalUid.replace("@", "-copy@") + "-double-calendar-sync";
+        if (originalUid.contains("@")) {
+            return originalUid.replace("@", "-copy@") + "-double-calendar-sync";
+        } else {
+            return originalUid + "-copy@double-calendar-sync";
+        }
     }
 
     private boolean createShortEventInCalendar2(CalendarEventData sourceEvent, String copyUid) {
