@@ -10,10 +10,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
+import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.regex.Matcher;
@@ -36,6 +33,12 @@ public class YandexCalendarService {
 
     private volatile String lastSyncInfo = null;
 
+    private String maskUrl(String url) {
+        if (url == null) return null;
+        // Убирает всё, что между // и @
+        return url.replaceAll("://[^@]*@", "://*****@");
+    }
+
     /**
      * Инициализация и проверка подключения
      */
@@ -46,8 +49,8 @@ public class YandexCalendarService {
             String url1 = getCalendar1Url();
             String url2 = getCalendar2Url();
 
-            log.info("URL календаря 1: {}", url1);
-            log.info("URL календаря 2: {}", url2);
+            log.info("URL календаря 1: {}", maskUrl(url1));
+            log.info("URL календаря 2: {}", maskUrl(url2));
 
             if (url1 == null || url2 == null) {
                 log.error("❌ URL календарей не заданы");
@@ -263,14 +266,23 @@ public class YandexCalendarService {
         ics.append("UID:").append(uid).append("\r\n");
         ics.append("DTSTAMP:").append(nowUtc.format(utcFormatter)).append("\r\n");
 
-        if (isAllDay && start != null) {
-            LocalDate startDate = start.toLocalDate();
-            ics.append("DTSTART;VALUE=DATE:").append(startDate.format(ALL_DAY_FORMAT)).append("\r\n");
-            if (end != null) {
-                ics.append("DTEND;VALUE=DATE:").append(end.toLocalDate().format(ALL_DAY_FORMAT)).append("\r\n");
-            } else {
-                ics.append("DTEND;VALUE=DATE:").append(startDate.plusDays(1).format(ALL_DAY_FORMAT)).append("\r\n");
-            }
+
+            if (!isAllDay && start != null) {
+                // Получаем системный часовой пояс
+                ZoneId systemZone = ZoneId.systemDefault();
+
+                // Конвертируем LocalDateTime в ZonedDateTime с системным TZ
+                ZonedDateTime startZoned = start.atZone(systemZone);
+                ZonedDateTime endZoned = end != null ? end.atZone(systemZone) : startZoned.plusHours(1);
+
+                // Конвертируем в UTC (без жесткого кода!)
+                ZonedDateTime startUtc = startZoned.withZoneSameInstant(ZoneOffset.UTC);
+                ZonedDateTime endUtc = endZoned.withZoneSameInstant(ZoneOffset.UTC);
+
+                ics.append("DTSTART:").append(startUtc.format(DATE_TIME_UTC_FORMAT)).append("\r\n");
+                ics.append("DTEND:").append(endUtc.format(DATE_TIME_UTC_FORMAT)).append("\r\n");
+
+
         } else if (start != null) {
             LocalDateTime startUtc = start.minusHours(3);
             LocalDateTime endUtc = (end != null) ? end.minusHours(3) : startUtc.plusHours(1);
