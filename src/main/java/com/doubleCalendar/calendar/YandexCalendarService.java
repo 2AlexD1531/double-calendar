@@ -32,6 +32,8 @@ public class YandexCalendarService {
     private static final long RETRY_DELAY_MS = 1000;
 
     private volatile String lastSyncInfo = null;
+    private final Object syncLock = new Object();
+
 
     private String maskUrl(String url) {
         if (url == null) return null;
@@ -106,91 +108,92 @@ public class YandexCalendarService {
 
     public void syncCalendars() {
         log.info("=== Начало синхронизации календарей ===");
+        synchronized (syncLock) {
+            try {
+                List<CalendarEventData> eventsFromCalendar1 = getAllEventsFromCalendar1();
+                log.info("Получено {} событий из календаря 1", eventsFromCalendar1.size());
 
-        try {
-            List<CalendarEventData> eventsFromCalendar1 = getAllEventsFromCalendar1();
-            log.info("Получено {} событий из календаря 1", eventsFromCalendar1.size());
+                if (eventsFromCalendar1.isEmpty()) {
+                    log.info("Нет событий для синхронизации");
+                    updateLastSyncInfo(0, 0, 0);
+                    return;
+                }
 
-            if (eventsFromCalendar1.isEmpty()) {
-                log.info("Нет событий для синхронизации");
-                updateLastSyncInfo(0, 0, 0);
-                return;
+                // Фильтруем только будущие события
+                LocalDateTime now = LocalDateTime.now();
+                LocalDateTime todayStart = now.toLocalDate().atStartOfDay();
+
+                List<CalendarEventData> futureEvents = new ArrayList<>();
+                for (CalendarEventData event : eventsFromCalendar1) {
+                    if (event.getStart() != null && !event.getStart().isBefore(todayStart)) {
+                        futureEvents.add(event);
+                    }
+                }
+
+                log.info("Будущих событий: {} (из {})", futureEvents.size(), eventsFromCalendar1.size());
+
+                if (futureEvents.isEmpty()) {
+                    log.info("Нет будущих событий для синхронизации");
+                    updateLastSyncInfo(0, 0, 0);
+                    return;
+                }
+
+                // Получаем все UID из календаря 2
+                List<CalendarEventData> eventsFromCalendar2 = getAllEventsFromCalendar2();
+                Set<String> existingUids = new HashSet<>();
+                for (CalendarEventData event : eventsFromCalendar2) {
+                    if (event.getUid() != null) {
+                        existingUids.add(event.getUid());
+                    }
+                }
+                log.info("Событий в календаре 2: {}", existingUids.size());
+
+                int createdCount = 0;
+                int skippedCount = 0;
+
+                for (CalendarEventData sourceEvent : futureEvents) {
+                    String originalUid = sourceEvent.getUid();
+                    if (originalUid == null || originalUid.isEmpty()) {
+                        log.warn("Пропуск события без UID: {}", sourceEvent.getSummary());
+                        continue;
+                    }
+
+                    // Генерируем UID копии на основе оригинального
+                    String copyUid = generateCopyUid(originalUid);
+
+                    // Проверяем, есть ли уже копия
+                    if (existingUids.contains(copyUid)) {
+                        log.debug("Копия уже существует: {} -> {}", originalUid, copyUid);
+                        skippedCount++;
+                        continue;
+                    }
+
+                    log.info("Создание копии: {} -> {} ({})", originalUid, copyUid, sourceEvent.getSummary());
+
+                    if (createShortEventInCalendar2(sourceEvent, copyUid)) {
+                        createdCount++;
+                        existingUids.add(copyUid);
+                        log.info("✓ Создана копия: {}", sourceEvent.getSummary());
+                    } else {
+                        log.error("✗ Не удалось создать копию: {}", sourceEvent.getSummary());
+                    }
+
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+
+                log.info("Синхронизация завершена. Создано: {}, Пропущено: {}", createdCount, skippedCount);
+                updateLastSyncInfo(createdCount, 0, skippedCount);
+
+            } catch (Exception e) {
+                log.error("Ошибка при синхронизации календарей: {}", e.getMessage(), e);
             }
 
-            // Фильтруем только будущие события
-            LocalDateTime now = LocalDateTime.now();
-            LocalDateTime todayStart = now.toLocalDate().atStartOfDay();
-
-            List<CalendarEventData> futureEvents = new ArrayList<>();
-            for (CalendarEventData event : eventsFromCalendar1) {
-                if (event.getStart() != null && !event.getStart().isBefore(todayStart)) {
-                    futureEvents.add(event);
-                }
-            }
-
-            log.info("Будущих событий: {} (из {})", futureEvents.size(), eventsFromCalendar1.size());
-
-            if (futureEvents.isEmpty()) {
-                log.info("Нет будущих событий для синхронизации");
-                updateLastSyncInfo(0, 0, 0);
-                return;
-            }
-
-            // Получаем все UID из календаря 2
-            List<CalendarEventData> eventsFromCalendar2 = getAllEventsFromCalendar2();
-            Set<String> existingUids = new HashSet<>();
-            for (CalendarEventData event : eventsFromCalendar2) {
-                if (event.getUid() != null) {
-                    existingUids.add(event.getUid());
-                }
-            }
-            log.info("Событий в календаре 2: {}", existingUids.size());
-
-            int createdCount = 0;
-            int skippedCount = 0;
-
-            for (CalendarEventData sourceEvent : futureEvents) {
-                String originalUid = sourceEvent.getUid();
-                if (originalUid == null || originalUid.isEmpty()) {
-                    log.warn("Пропуск события без UID: {}", sourceEvent.getSummary());
-                    continue;
-                }
-
-                // Генерируем UID копии на основе оригинального
-                String copyUid = generateCopyUid(originalUid);
-
-                // Проверяем, есть ли уже копия
-                if (existingUids.contains(copyUid)) {
-                    log.debug("Копия уже существует: {} -> {}", originalUid, copyUid);
-                    skippedCount++;
-                    continue;
-                }
-
-                log.info("Создание копии: {} -> {} ({})", originalUid, copyUid, sourceEvent.getSummary());
-
-                if (createShortEventInCalendar2(sourceEvent, copyUid)) {
-                    createdCount++;
-                    existingUids.add(copyUid);
-                    log.info("✓ Создана копия: {}", sourceEvent.getSummary());
-                } else {
-                    log.error("✗ Не удалось создать копию: {}", sourceEvent.getSummary());
-                }
-
-                try {
-                    Thread.sleep(100);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-
-            log.info("Синхронизация завершена. Создано: {}, Пропущено: {}", createdCount, skippedCount);
-            updateLastSyncInfo(createdCount, 0, skippedCount);
-
-        } catch (Exception e) {
-            log.error("Ошибка при синхронизации календарей: {}", e.getMessage(), e);
+            log.info("=== Конец синхронизации ===");
         }
-
-        log.info("=== Конец синхронизации ===");
     }
 
     /**
