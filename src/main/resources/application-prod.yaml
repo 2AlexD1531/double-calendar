@@ -27,7 +27,7 @@ calendar:
     password: ${CALENDAR1_PASSWORD:}
     calendar-name: ${CALENDAR1_NAME:}
     sync-lookback-months: 3
-    sync-lookahead-months: 3
+    sync-lookahead-months: 10
     cache-ttl-minutes: 5
 
   calendar2:
