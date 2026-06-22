@@ -268,7 +268,7 @@ public class YandexCalendarService {
         ics.append("VERSION:2.0\r\n");
         ics.append("PRODID:-//Double Calendar Sync//RU\r\n");
         ics.append("CALSCALE:GREGORIAN\r\n");
-        ics.append("METHOD:PUBLISH\r\n");
+        ics.append("METHOD:REQUEST\r\n");
         ics.append("BEGIN:VEVENT\r\n");
         ics.append("UID:").append(uid).append("\r\n");
         ics.append("DTSTAMP:").append(nowUtc.format(utcFormatter)).append("\r\n");
@@ -302,6 +302,8 @@ public class YandexCalendarService {
         }
 
         ics.append("SUMMARY:").append(escapeText(summary)).append("\r\n");
+        ics.append("CLASS:PUBLIC\r\n");
+        ics.append("X-YANDEX-VISIBILITY:PUBLIC\r\n");
         ics.append("TRANSP:TRANSPARENT\r\n");
         ics.append("END:VEVENT\r\n");
         ics.append("END:VCALENDAR\r\n");
