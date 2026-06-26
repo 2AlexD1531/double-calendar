@@ -51,7 +51,7 @@ public class YandexCalendarService {
 
     private void clearCalendar2() {
         log.info("Очистка календаря 2...");
-        List<CalendarEventData> events = getAllEventsFromCalendar2();
+        List<CalendarEventData> events = getAllEventsFromCalendar2Unfiltered();
         int deleted = 0;
         for (CalendarEventData event : events) {
             String uid = event.getUid();
@@ -251,6 +251,50 @@ public class YandexCalendarService {
         }
     }
 
+
+    private List<CalendarEventData> getAllEventsFromCalendar2Unfiltered() {
+        String url = getCalendar2Url();
+        if (url == null) return new ArrayList<>();
+        return fetchEventsUnfiltered(url, calendar2Config.getUsername(), calendar2Config.getPassword());
+    }
+
+    private List<CalendarEventData> fetchEventsUnfiltered(String calendarUrl, String username, String password) {
+        for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            try {
+                // Без time-range — получаем ВСЕ события
+                String reportBody = "<?xml version=\"1.0\" encoding=\"utf-8\" ?>\n" +
+                        "<C:calendar-query xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\n" +
+                        "  <D:prop><C:calendar-data/></D:prop>\n" +
+                        "  <C:filter>\n" +
+                        "    <C:comp-filter name=\"VCALENDAR\">\n" +
+                        "      <C:comp-filter name=\"VEVENT\"/>\n" +
+                        "    </C:comp-filter>\n" +
+                        "  </C:filter>\n" +
+                        "</C:calendar-query>";
+
+                ResponseEntity<String> response = restClient.method(HttpMethod.valueOf("REPORT"))
+                        .uri(calendarUrl)
+                        .headers(h -> setReportHeaders(h, username, password))
+                        .body(reportBody)
+                        .retrieve()
+                        .toEntity(String.class);
+
+                if (response.getStatusCode().is2xxSuccessful() || response.getStatusCode().value() == 207) {
+                    return parseEvents(response.getBody());
+                }
+            } catch (Exception e) {
+                log.error("Ошибка получения всех событий из {} (попытка {}): {}", calendarUrl, attempt + 1, e.getMessage());
+                if (attempt < MAX_RETRIES - 1) {
+                    try {
+                        Thread.sleep(RETRY_DELAY_MS * (attempt + 1));
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+        }
+        return new ArrayList<>();
+    }
 
 
     /**
