@@ -2,6 +2,7 @@ package com.doubleCalendar.calendar;
 
 import com.doubleCalendar.config.Calendar2Config;
 import com.doubleCalendar.config.YandexCalendarConfig;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
@@ -34,6 +35,34 @@ public class YandexCalendarService {
     private volatile String lastSyncInfo = null;
     private final Object syncLock = new Object();
 
+    private static final String COPY_SUFFIX = "@double-calendar-sync";
+
+    @PostConstruct
+    public void init() {
+        log.info("Инициализация YandexCalendarService...");
+
+        // Очистка календаря 2 от старых копий
+        clearCalendar2();
+
+        // Переход на Base64-формат UID
+        log.info("UID формат: Base64");
+    }
+
+
+    private void clearCalendar2() {
+        log.info("Очистка календаря 2...");
+        List<CalendarEventData> events = getAllEventsFromCalendar2();
+        int deleted = 0;
+        for (CalendarEventData event : events) {
+            String uid = event.getUid();
+            if (uid != null) {
+                if (deleteEventFromCalendar2(uid)) {
+                    deleted++;
+                }
+            }
+        }
+        log.info("Удалено {} событий из календаря 2", deleted);
+    }
 
     private String maskUrl(String url) {
         if (url == null) return null;
@@ -225,19 +254,6 @@ public class YandexCalendarService {
 
 
     /**
-     * Восстанавливает оригинальный UID из UID копии
-     */
-    private String restoreOriginalUid(String copyUid) {
-        // "abc-copy@yandex.ru-double-calendar-sync" → "abc@yandex.ru"
-        if (copyUid.endsWith("-double-calendar-sync")) {
-            String withoutSuffix = copyUid.substring(0, copyUid.length() - "-double-calendar-sync".length());
-            // "abc-copy@yandex.ru" → "abc@yandex.ru"
-            return withoutSuffix.replace("-copy@", "@");
-        }
-        return copyUid;
-    }
-
-    /**
      * Удаляет событие из календаря 2
      */
     private boolean deleteEventFromCalendar2(String uid) {
@@ -276,14 +292,18 @@ public class YandexCalendarService {
     /**
      * Генерация UID копии на основе оригинального UID
      */
+
     private String generateCopyUid(String originalUid) {
-        // Добавляем суффикс к оригинальному UID
-        // Например: original@yandex.ru -> original-copy@double-calendar-sync
-        if (originalUid.contains("@")) {
-            return originalUid.replace("@", "-copy@") + "-double-calendar-sync";
-        } else {
-            return originalUid + "-copy@double-calendar-sync";
+        String base64 = Base64.getUrlEncoder().withoutPadding().encodeToString(originalUid.getBytes(StandardCharsets.UTF_8));
+        return base64 + COPY_SUFFIX;
+    }
+
+    private String restoreOriginalUid(String copyUid) {
+        if (copyUid.endsWith(COPY_SUFFIX)) {
+            String base64 = copyUid.substring(0, copyUid.length() - COPY_SUFFIX.length());
+            return new String(Base64.getUrlDecoder().decode(base64), StandardCharsets.UTF_8);
         }
+        return copyUid;
     }
 
     private boolean createShortEventInCalendar2(CalendarEventData sourceEvent, String copyUid) {
