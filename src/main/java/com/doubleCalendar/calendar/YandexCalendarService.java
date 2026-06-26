@@ -146,15 +146,26 @@ public class YandexCalendarService {
                 int createdCount = 0;
                 int skippedCount = 0;
 
+                log.info("existingUids в календаре 2 ({} шт): {}", existingUids.size(), existingUids);
+
+
                 // Создаём копии новых событий
                 for (CalendarEventData sourceEvent : futureEvents) {
                     String originalUid = sourceEvent.getUid();
+
+
+
                     if (originalUid == null || originalUid.isEmpty()) {
                         log.warn("Пропуск события без UID: {}", sourceEvent.getSummary());
                         continue;
                     }
 
                     String copyUid = generateCopyUid(originalUid);
+
+
+                    log.info("Проверка копии: original={}, copy={}, existsInCalendar2={}",
+                            originalUid, copyUid, existingUids.contains(copyUid));
+
 
                     if (existingUids.contains(copyUid)) {
                         log.debug("Копия уже существует: {} -> {}", originalUid, copyUid);
