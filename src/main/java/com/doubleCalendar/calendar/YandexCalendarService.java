@@ -113,10 +113,21 @@ public class YandexCalendarService {
                 List<CalendarEventData> eventsFromCalendar1 = getAllEventsFromCalendar1();
                 log.info("Получено {} событий из календаря 1", eventsFromCalendar1.size());
 
-                if (eventsFromCalendar1.isEmpty()) {
-                    log.info("Нет событий для синхронизации");
-                    updateLastSyncInfo(0, 0, 0);
-                    return;
+                List<CalendarEventData> eventsFromCalendar2 = getAllEventsFromCalendar2();
+                Set<String> existingUids = new HashSet<>();
+                for (CalendarEventData event : eventsFromCalendar2) {
+                    if (event.getUid() != null) {
+                        existingUids.add(event.getUid());
+                    }
+                }
+                log.info("Событий в календаре 2: {}", existingUids.size());
+
+                // Собираем оригинальные UID'ы для проверки удалений
+                Set<String> originalUids = new HashSet<>();
+                for (CalendarEventData event : eventsFromCalendar1) {
+                    if (event.getUid() != null) {
+                        originalUids.add(event.getUid());
+                    }
                 }
 
                 // Фильтруем только будущие события
@@ -132,25 +143,10 @@ public class YandexCalendarService {
 
                 log.info("Будущих событий: {} (из {})", futureEvents.size(), eventsFromCalendar1.size());
 
-                if (futureEvents.isEmpty()) {
-                    log.info("Нет будущих событий для синхронизации");
-                    updateLastSyncInfo(0, 0, 0);
-                    return;
-                }
-
-                // Получаем все UID из календаря 2
-                List<CalendarEventData> eventsFromCalendar2 = getAllEventsFromCalendar2();
-                Set<String> existingUids = new HashSet<>();
-                for (CalendarEventData event : eventsFromCalendar2) {
-                    if (event.getUid() != null) {
-                        existingUids.add(event.getUid());
-                    }
-                }
-                log.info("Событий в календаре 2: {}", existingUids.size());
-
                 int createdCount = 0;
                 int skippedCount = 0;
 
+                // Создаём копии новых событий
                 for (CalendarEventData sourceEvent : futureEvents) {
                     String originalUid = sourceEvent.getUid();
                     if (originalUid == null || originalUid.isEmpty()) {
@@ -158,10 +154,8 @@ public class YandexCalendarService {
                         continue;
                     }
 
-                    // Генерируем UID копии на основе оригинального
                     String copyUid = generateCopyUid(originalUid);
 
-                    // Проверяем, есть ли уже копия
                     if (existingUids.contains(copyUid)) {
                         log.debug("Копия уже существует: {} -> {}", originalUid, copyUid);
                         skippedCount++;
@@ -178,15 +172,36 @@ public class YandexCalendarService {
                         log.error("✗ Не удалось создать копию: {}", sourceEvent.getSummary());
                     }
 
-                    try {
-                        Thread.sleep(100);
-                    } catch (InterruptedException e) {
+                    try { Thread.sleep(100); } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
                 }
 
-                log.info("Синхронизация завершена. Создано: {}, Пропущено: {}", createdCount, skippedCount);
-                updateLastSyncInfo(createdCount, 0, skippedCount);
+                // Удаляем копии, у которых оригинал удалён из календаря 1
+                int deletedCount = 0;
+                for (CalendarEventData event2 : eventsFromCalendar2) {
+                    String uid2 = event2.getUid();
+                    if (uid2 == null || !uid2.endsWith("-double-calendar-sync")) continue;
+
+                    String originalUid = restoreOriginalUid(uid2);
+
+                    if (!originalUids.contains(originalUid)) {
+                        log.info("Удаление копии (оригинал удалён): {} -> оригинал {}", uid2, originalUid);
+                        if (deleteEventFromCalendar2(uid2)) {
+                            deletedCount++;
+                            log.info("✓ Удалена копия: {}", event2.getSummary());
+                        } else {
+                            log.error("✗ Не удалось удалить копию: {}", event2.getSummary());
+                        }
+                        try { Thread.sleep(100); } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                }
+
+                log.info("Синхронизация завершена. Создано: {}, Удалено: {}, Пропущено: {}",
+                        createdCount, deletedCount, skippedCount);
+                updateLastSyncInfo(createdCount, deletedCount, skippedCount);
 
             } catch (Exception e) {
                 log.error("Ошибка при синхронизации календарей: {}", e.getMessage(), e);
@@ -194,6 +209,57 @@ public class YandexCalendarService {
 
             log.info("=== Конец синхронизации ===");
         }
+    }
+
+
+
+    /**
+     * Восстанавливает оригинальный UID из UID копии
+     */
+    private String restoreOriginalUid(String copyUid) {
+        // "abc-copy@yandex.ru-double-calendar-sync" → "abc@yandex.ru"
+        if (copyUid.endsWith("-double-calendar-sync")) {
+            String withoutSuffix = copyUid.substring(0, copyUid.length() - "-double-calendar-sync".length());
+            // "abc-copy@yandex.ru" → "abc@yandex.ru"
+            return withoutSuffix.replace("-copy@", "@");
+        }
+        return copyUid;
+    }
+
+    /**
+     * Удаляет событие из календаря 2
+     */
+    private boolean deleteEventFromCalendar2(String uid) {
+        String calendar2Url = getCalendar2Url();
+        if (calendar2Url == null) return false;
+
+        for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            try {
+                String eventUrl = calendar2Url + "/" + uid + ".ics";
+
+                ResponseEntity<Void> response = restClient.delete()
+                        .uri(eventUrl)
+                        .headers(h -> setCalendarHeaders(h, calendar2Config.getUsername(), calendar2Config.getPassword()))
+                        .retrieve()
+                        .toBodilessEntity();
+
+                if (response.getStatusCode().is2xxSuccessful() ||
+                        response.getStatusCode() == HttpStatus.NO_CONTENT) {
+                    return true;
+                }
+            } catch (RestClientException e) {
+                log.warn("Ошибка удаления (попытка {}): {}", attempt + 1, e.getMessage());
+                if (attempt < MAX_RETRIES - 1) {
+                    try {
+                        Thread.sleep(RETRY_DELAY_MS * (attempt + 1));
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     /**
