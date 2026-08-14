@@ -21,6 +21,6 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -p ${{ secrets.SERVER_PORT }} ${{ secrets.SERVER_USER }}@$HOST "sudo -iu deploy bash -c 'cd /home/deploy/doubleCalendar && whoami && pwd && docker compose down --remove-orphans && docker builder prune -f && git pull origin prod && docker compose up -d --build'"
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -p ${{ secrets.SERVER_PORT }} ${{ secrets.SERVER_USER }}@$HOST "sudo -iu deploy bash -c 'cd /home/deploy/double-calendar && whoami && pwd && docker compose down --remove-orphans && docker builder prune -f && git pull origin prod && docker compose up -d --build'"
           
           rm -f ~/.ssh/id_rsa

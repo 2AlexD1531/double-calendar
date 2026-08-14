@@ -130,12 +130,11 @@ public class CalendarAppManager {
         String url1 = params.get("calendar1_url");
         String url2 = params.get("calendar2_url");
 
-        if (!url1.startsWith("https://") && !url1.startsWith("http://")) {
-            return "Некорректный URL календаря 1";
+        if (!url1.startsWith("https://")) {
+            return "❌ Календарь 1 должен использовать HTTPS (защищенное соединение)";
         }
-
-        if (!url2.startsWith("https://") && !url2.startsWith("http://")) {
-            return "Некорректный URL календаря 2";
+        if (!url2.startsWith("https://")) {
+            return "❌ Календарь 2 должен использовать HTTPS (защищенное соединение)";
         }
 
         return null; // Всё OK

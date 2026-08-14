@@ -2,6 +2,7 @@ package com.doubleCalendar.calendar;
 
 import com.doubleCalendar.config.Calendar2Config;
 import com.doubleCalendar.config.YandexCalendarConfig;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
@@ -10,10 +11,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
+import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.regex.Matcher;
@@ -35,6 +33,42 @@ public class YandexCalendarService {
     private static final long RETRY_DELAY_MS = 1000;
 
     private volatile String lastSyncInfo = null;
+    private final Object syncLock = new Object();
+
+    private static final String COPY_SUFFIX = "@double-calendar-sync";
+
+    @PostConstruct
+    public void init() {
+        log.info("Инициализация YandexCalendarService...");
+
+        // Очистка календаря 2 от старых копий
+        clearCalendar2();
+
+        // Переход на Base64-формат UID
+        log.info("UID формат: Base64");
+    }
+
+
+    private void clearCalendar2() {
+        log.info("Очистка календаря 2...");
+        List<CalendarEventData> events = getAllEventsFromCalendar2Unfiltered();
+        int deleted = 0;
+        for (CalendarEventData event : events) {
+            String uid = event.getUid();
+            if (uid != null) {
+                if (deleteEventFromCalendar2(uid)) {
+                    deleted++;
+                }
+            }
+        }
+        log.info("Удалено {} событий из календаря 2", deleted);
+    }
+
+    private String maskUrl(String url) {
+        if (url == null) return null;
+        // Убирает всё, что между // и @
+        return url.replaceAll("://[^@]*@", "://*****@");
+    }
 
     /**
      * Инициализация и проверка подключения
@@ -46,8 +80,8 @@ public class YandexCalendarService {
             String url1 = getCalendar1Url();
             String url2 = getCalendar2Url();
 
-            log.info("URL календаря 1: {}", url1);
-            log.info("URL календаря 2: {}", url2);
+            log.info("URL календаря 1: {}", maskUrl(url1));
+            log.info("URL календаря 2: {}", maskUrl(url2));
 
             if (url1 == null || url2 == null) {
                 log.error("❌ URL календарей не заданы");
@@ -103,100 +137,217 @@ public class YandexCalendarService {
 
     public void syncCalendars() {
         log.info("=== Начало синхронизации календарей ===");
+        synchronized (syncLock) {
+            try {
+                List<CalendarEventData> eventsFromCalendar1 = getAllEventsFromCalendar1();
+                log.info("Получено {} событий из календаря 1", eventsFromCalendar1.size());
 
-        try {
-            List<CalendarEventData> eventsFromCalendar1 = getAllEventsFromCalendar1();
-            log.info("Получено {} событий из календаря 1", eventsFromCalendar1.size());
+                List<CalendarEventData> eventsFromCalendar2 = getAllEventsFromCalendar2();
+                Set<String> existingUids = new HashSet<>();
+                for (CalendarEventData event : eventsFromCalendar2) {
+                    if (event.getUid() != null) {
+                        existingUids.add(event.getUid());
+                    }
+                }
+                log.info("Событий в календаре 2: {}", existingUids.size());
 
-            if (eventsFromCalendar1.isEmpty()) {
-                log.info("Нет событий для синхронизации");
-                updateLastSyncInfo(0, 0, 0);
-                return;
+                // Собираем оригинальные UID'ы для проверки удалений
+                Set<String> originalUids = new HashSet<>();
+                for (CalendarEventData event : eventsFromCalendar1) {
+                    if (event.getUid() != null) {
+                        originalUids.add(event.getUid());
+                    }
+                }
+
+                // Фильтруем только будущие события
+                LocalDateTime now = LocalDateTime.now();
+                LocalDateTime todayStart = now.toLocalDate().atStartOfDay();
+
+                List<CalendarEventData> futureEvents = new ArrayList<>();
+                for (CalendarEventData event : eventsFromCalendar1) {
+                    if (event.getStart() != null && !event.getStart().isBefore(todayStart)) {
+                        futureEvents.add(event);
+                    }
+                }
+
+                log.info("Будущих событий: {} (из {})", futureEvents.size(), eventsFromCalendar1.size());
+
+                int createdCount = 0;
+                int skippedCount = 0;
+
+                log.info("existingUids в календаре 2 ({} шт): {}", existingUids.size(), existingUids);
+
+
+                // Создаём копии новых событий
+                for (CalendarEventData sourceEvent : futureEvents) {
+                    String originalUid = sourceEvent.getUid();
+
+
+
+                    if (originalUid == null || originalUid.isEmpty()) {
+                        log.warn("Пропуск события без UID: {}", sourceEvent.getSummary());
+                        continue;
+                    }
+
+                    String copyUid = generateCopyUid(originalUid);
+
+
+                    log.info("Проверка копии: original={}, copy={}, existsInCalendar2={}",
+                            originalUid, copyUid, existingUids.contains(copyUid));
+
+
+                    if (existingUids.contains(copyUid)) {
+                        log.debug("Копия уже существует: {} -> {}", originalUid, copyUid);
+                        skippedCount++;
+                        continue;
+                    }
+
+                    log.info("Создание копии: {} -> {} ({})", originalUid, copyUid, sourceEvent.getSummary());
+
+                    if (createShortEventInCalendar2(sourceEvent, copyUid)) {
+                        createdCount++;
+                        existingUids.add(copyUid);
+                        log.info("✓ Создана копия: {}", sourceEvent.getSummary());
+                    } else {
+                        log.error("✗ Не удалось создать копию: {}", sourceEvent.getSummary());
+                    }
+
+                    try { Thread.sleep(100); } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+
+                // Удаляем копии, у которых оригинал удалён из календаря 1
+                int deletedCount = 0;
+                for (CalendarEventData event2 : eventsFromCalendar2) {
+                    String uid2 = event2.getUid();
+                    if (uid2 == null || !uid2.endsWith("-double-calendar-sync")) continue;
+
+                    String originalUid = restoreOriginalUid(uid2);
+
+                    if (!originalUids.contains(originalUid)) {
+                        log.info("Удаление копии (оригинал удалён): {} -> оригинал {}", uid2, originalUid);
+                        if (deleteEventFromCalendar2(uid2)) {
+                            deletedCount++;
+                            log.info("✓ Удалена копия: {}", event2.getSummary());
+                        } else {
+                            log.error("✗ Не удалось удалить копию: {}", event2.getSummary());
+                        }
+                        try { Thread.sleep(100); } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                }
+
+                log.info("Синхронизация завершена. Создано: {}, Удалено: {}, Пропущено: {}",
+                        createdCount, deletedCount, skippedCount);
+                updateLastSyncInfo(createdCount, deletedCount, skippedCount);
+
+            } catch (Exception e) {
+                log.error("Ошибка при синхронизации календарей: {}", e.getMessage(), e);
             }
 
-            // Фильтруем только будущие события
-            LocalDateTime now = LocalDateTime.now();
-            LocalDateTime todayStart = now.toLocalDate().atStartOfDay();
-
-            List<CalendarEventData> futureEvents = new ArrayList<>();
-            for (CalendarEventData event : eventsFromCalendar1) {
-                if (event.getStart() != null && !event.getStart().isBefore(todayStart)) {
-                    futureEvents.add(event);
-                }
-            }
-
-            log.info("Будущих событий: {} (из {})", futureEvents.size(), eventsFromCalendar1.size());
-
-            if (futureEvents.isEmpty()) {
-                log.info("Нет будущих событий для синхронизации");
-                updateLastSyncInfo(0, 0, 0);
-                return;
-            }
-
-            // Получаем все UID из календаря 2
-            List<CalendarEventData> eventsFromCalendar2 = getAllEventsFromCalendar2();
-            Set<String> existingUids = new HashSet<>();
-            for (CalendarEventData event : eventsFromCalendar2) {
-                if (event.getUid() != null) {
-                    existingUids.add(event.getUid());
-                }
-            }
-            log.info("Событий в календаре 2: {}", existingUids.size());
-
-            int createdCount = 0;
-            int skippedCount = 0;
-
-            for (CalendarEventData sourceEvent : futureEvents) {
-                String originalUid = sourceEvent.getUid();
-                if (originalUid == null || originalUid.isEmpty()) {
-                    log.warn("Пропуск события без UID: {}", sourceEvent.getSummary());
-                    continue;
-                }
-
-                // Генерируем UID копии на основе оригинального
-                String copyUid = generateCopyUid(originalUid);
-
-                // Проверяем, есть ли уже копия
-                if (existingUids.contains(copyUid)) {
-                    log.debug("Копия уже существует: {} -> {}", originalUid, copyUid);
-                    skippedCount++;
-                    continue;
-                }
-
-                log.info("Создание копии: {} -> {} ({})", originalUid, copyUid, sourceEvent.getSummary());
-
-                if (createShortEventInCalendar2(sourceEvent, copyUid)) {
-                    createdCount++;
-                    existingUids.add(copyUid);
-                    log.info("✓ Создана копия: {}", sourceEvent.getSummary());
-                } else {
-                    log.error("✗ Не удалось создать копию: {}", sourceEvent.getSummary());
-                }
-
-                try {
-                    Thread.sleep(100);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-
-            log.info("Синхронизация завершена. Создано: {}, Пропущено: {}", createdCount, skippedCount);
-            updateLastSyncInfo(createdCount, 0, skippedCount);
-
-        } catch (Exception e) {
-            log.error("Ошибка при синхронизации календарей: {}", e.getMessage(), e);
+            log.info("=== Конец синхронизации ===");
         }
+    }
 
-        log.info("=== Конец синхронизации ===");
+
+    private List<CalendarEventData> getAllEventsFromCalendar2Unfiltered() {
+        String url = getCalendar2Url();
+        if (url == null) return new ArrayList<>();
+        return fetchEventsUnfiltered(url, calendar2Config.getUsername(), calendar2Config.getPassword());
+    }
+
+    private List<CalendarEventData> fetchEventsUnfiltered(String calendarUrl, String username, String password) {
+        for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            try {
+                // Без time-range — получаем ВСЕ события
+                String reportBody = "<?xml version=\"1.0\" encoding=\"utf-8\" ?>\n" +
+                        "<C:calendar-query xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\n" +
+                        "  <D:prop><C:calendar-data/></D:prop>\n" +
+                        "  <C:filter>\n" +
+                        "    <C:comp-filter name=\"VCALENDAR\">\n" +
+                        "      <C:comp-filter name=\"VEVENT\"/>\n" +
+                        "    </C:comp-filter>\n" +
+                        "  </C:filter>\n" +
+                        "</C:calendar-query>";
+
+                ResponseEntity<String> response = restClient.method(HttpMethod.valueOf("REPORT"))
+                        .uri(calendarUrl)
+                        .headers(h -> setReportHeaders(h, username, password))
+                        .body(reportBody)
+                        .retrieve()
+                        .toEntity(String.class);
+
+                if (response.getStatusCode().is2xxSuccessful() || response.getStatusCode().value() == 207) {
+                    return parseEvents(response.getBody());
+                }
+            } catch (Exception e) {
+                log.error("Ошибка получения всех событий из {} (попытка {}): {}", calendarUrl, attempt + 1, e.getMessage());
+                if (attempt < MAX_RETRIES - 1) {
+                    try {
+                        Thread.sleep(RETRY_DELAY_MS * (attempt + 1));
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+        }
+        return new ArrayList<>();
+    }
+
+
+    /**
+     * Удаляет событие из календаря 2
+     */
+    private boolean deleteEventFromCalendar2(String uid) {
+        String calendar2Url = getCalendar2Url();
+        if (calendar2Url == null) return false;
+
+        for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            try {
+                String eventUrl = calendar2Url + "/" + uid + ".ics";
+
+                ResponseEntity<Void> response = restClient.delete()
+                        .uri(eventUrl)
+                        .headers(h -> setCalendarHeaders(h, calendar2Config.getUsername(), calendar2Config.getPassword()))
+                        .retrieve()
+                        .toBodilessEntity();
+
+                if (response.getStatusCode().is2xxSuccessful() ||
+                        response.getStatusCode() == HttpStatus.NO_CONTENT) {
+                    return true;
+                }
+            } catch (RestClientException e) {
+                log.warn("Ошибка удаления (попытка {}): {}", attempt + 1, e.getMessage());
+                if (attempt < MAX_RETRIES - 1) {
+                    try {
+                        Thread.sleep(RETRY_DELAY_MS * (attempt + 1));
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     /**
      * Генерация UID копии на основе оригинального UID
      */
+
     private String generateCopyUid(String originalUid) {
-        // Добавляем суффикс к оригинальному UID
-        // Например: original@yandex.ru -> original-copy@double-calendar-sync
-        return originalUid.replace("@", "-copy@") + "-double-calendar-sync";
+        String base64 = Base64.getUrlEncoder().withoutPadding().encodeToString(originalUid.getBytes(StandardCharsets.UTF_8));
+        return base64 + COPY_SUFFIX;
+    }
+
+    private String restoreOriginalUid(String copyUid) {
+        if (copyUid.endsWith(COPY_SUFFIX)) {
+            String base64 = copyUid.substring(0, copyUid.length() - COPY_SUFFIX.length());
+            return new String(Base64.getUrlDecoder().decode(base64), StandardCharsets.UTF_8);
+        }
+        return copyUid;
     }
 
     private boolean createShortEventInCalendar2(CalendarEventData sourceEvent, String copyUid) {
@@ -258,19 +409,28 @@ public class YandexCalendarService {
         ics.append("VERSION:2.0\r\n");
         ics.append("PRODID:-//Double Calendar Sync//RU\r\n");
         ics.append("CALSCALE:GREGORIAN\r\n");
-        ics.append("METHOD:PUBLISH\r\n");
+        ics.append("METHOD:REQUEST\r\n");
         ics.append("BEGIN:VEVENT\r\n");
         ics.append("UID:").append(uid).append("\r\n");
         ics.append("DTSTAMP:").append(nowUtc.format(utcFormatter)).append("\r\n");
 
-        if (isAllDay && start != null) {
-            LocalDate startDate = start.toLocalDate();
-            ics.append("DTSTART;VALUE=DATE:").append(startDate.format(ALL_DAY_FORMAT)).append("\r\n");
-            if (end != null) {
-                ics.append("DTEND;VALUE=DATE:").append(end.toLocalDate().format(ALL_DAY_FORMAT)).append("\r\n");
-            } else {
-                ics.append("DTEND;VALUE=DATE:").append(startDate.plusDays(1).format(ALL_DAY_FORMAT)).append("\r\n");
-            }
+
+            if (!isAllDay && start != null) {
+                // Получаем системный часовой пояс
+                ZoneId systemZone = ZoneId.systemDefault();
+
+                // Конвертируем LocalDateTime в ZonedDateTime с системным TZ
+                ZonedDateTime startZoned = start.atZone(systemZone);
+                ZonedDateTime endZoned = end != null ? end.atZone(systemZone) : startZoned.plusHours(1);
+
+                // Конвертируем в UTC (без жесткого кода!)
+                ZonedDateTime startUtc = startZoned.withZoneSameInstant(ZoneOffset.UTC);
+                ZonedDateTime endUtc = endZoned.withZoneSameInstant(ZoneOffset.UTC);
+
+                ics.append("DTSTART:").append(startUtc.format(DATE_TIME_UTC_FORMAT)).append("\r\n");
+                ics.append("DTEND:").append(endUtc.format(DATE_TIME_UTC_FORMAT)).append("\r\n");
+
+
         } else if (start != null) {
             LocalDateTime startUtc = start.minusHours(3);
             LocalDateTime endUtc = (end != null) ? end.minusHours(3) : startUtc.plusHours(1);
@@ -283,6 +443,8 @@ public class YandexCalendarService {
         }
 
         ics.append("SUMMARY:").append(escapeText(summary)).append("\r\n");
+        ics.append("CLASS:PUBLIC\r\n");
+        ics.append("X-YANDEX-VISIBILITY:PUBLIC\r\n");
         ics.append("TRANSP:TRANSPARENT\r\n");
         ics.append("END:VEVENT\r\n");
         ics.append("END:VCALENDAR\r\n");
