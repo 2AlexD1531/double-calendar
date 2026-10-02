@@ -23,7 +23,7 @@ vk:
   # уведомления о новой брони / отмене события и просмотр ближайших дат.
   # Callback API сообщества: https://<домен>/vk/member/callback
   member-bot:
-    enabled: ${VK_MEMBER_ENABLED:false}
+    enabled: ${VK_MEMBER_ENABLED:true}
     accessToken: ${VK_MEMBER_TOKEN:}
     groupId: ${VK_MEMBER_GROUP_ID:0}
     confirmationCode: ${VK_MEMBER_CONFIRMATION_CODE:}
