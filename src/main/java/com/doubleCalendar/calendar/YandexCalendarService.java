@@ -25,6 +25,7 @@ public class YandexCalendarService {
     private final RestClient restClient;
     private final YandexCalendarConfig config;
     private final Calendar2Config calendar2Config;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     private static final DateTimeFormatter ALL_DAY_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final DateTimeFormatter DATE_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss");
@@ -34,6 +35,18 @@ public class YandexCalendarService {
 
     private volatile String lastSyncInfo = null;
     private final Object syncLock = new Object();
+
+    /**
+     * Будущие события календаря 1 (uid -> событие), известные после предыдущей синхронизации.
+     * null — синхронизация ещё не выполнялась (первый запуск), уведомления не рассылаются,
+     * чтобы не уведомлять о всех существующих бронях.
+     */
+    private volatile Map<String, CalendarEventData> knownEvents = null;
+
+    /**
+     * Ближайшие события календаря 1, полученные при последней синхронизации.
+     */
+    private volatile List<CalendarEventData> lastKnownEvents = new ArrayList<>();
 
     private static final String COPY_SUFFIX = "@double-calendar-sync";
 
@@ -243,6 +256,9 @@ public class YandexCalendarService {
                         createdCount, deletedCount, skippedCount);
                 updateLastSyncInfo(createdCount, deletedCount, skippedCount);
 
+                // Уведомления участникам календаря: новая бронь и отмена события
+                publishChangeNotifications(eventsFromCalendar1, futureEvents, todayStart);
+
             } catch (Exception e) {
                 log.error("Ошибка при синхронизации календарей: {}", e.getMessage(), e);
             }
@@ -251,6 +267,66 @@ public class YandexCalendarService {
         }
     }
 
+
+    /**
+     * Публикация уведомлений об изменениях брони: сравнивает будущие события календаря 1
+     * с состоянием предыдущей синхронизации.
+     * <p>
+     * При первом запуске (нет сохранённого состояния) уведомления не отправляются,
+     * чтобы не рассылать сообщения обо всех уже существующих событиях.
+     * Если календарь 1 вернул пустой список, состояние не меняется: это может быть сбоем связи,
+     * а не отменой всех броней.
+     */
+    private void publishChangeNotifications(List<CalendarEventData> allEvents,
+                                            List<CalendarEventData> futureEvents,
+                                            LocalDateTime todayStart) {
+        if (allEvents.isEmpty()) {
+            log.warn("Календарь 1 вернул пустой список: уведомления пропущены");
+            return;
+        }
+
+        Map<String, CalendarEventData> current = new LinkedHashMap<>();
+        for (CalendarEventData event : futureEvents) {
+            if (event.getUid() != null && !event.getUid().isEmpty()) {
+                current.put(event.getUid(), event);
+            }
+        }
+
+        Map<String, CalendarEventData> previous = knownEvents;
+        knownEvents = current;
+
+        if (previous == null) {
+            log.info("Первый запуск: состояние календаря сохранено ({} событий), уведомления не отправляются",
+                    current.size());
+            return;
+        }
+
+        for (CalendarEventData event : current.values()) {
+            if (!previous.containsKey(event.getUid())) {
+                eventPublisher.publishEvent(CalendarChangeEvent.created(event));
+            }
+        }
+
+        for (CalendarEventData event : previous.values()) {
+            // Событие, дата которого уже прошла, из списка будущих выпало естественно — это не отмена
+            boolean stillUpcoming = event.getStart() != null && !event.getStart().isBefore(todayStart);
+            if (stillUpcoming && !current.containsKey(event.getUid())) {
+                eventPublisher.publishEvent(CalendarChangeEvent.cancelled(event));
+            }
+        }
+    }
+
+    /**
+     * Ближайшие события календаря 1 (с описанием) для уведомлений и команды «ближайшие даты».
+     */
+    public List<CalendarEventData> getUpcomingEventsWithDescription() {
+        List<CalendarEventData> events = getAllEventsFromCalendar1();
+        if (!events.isEmpty()) {
+            lastKnownEvents = events;
+            return events;
+        }
+        return lastKnownEvents;
+    }
 
     private List<CalendarEventData> getAllEventsFromCalendar2Unfiltered() {
         String url = getCalendar2Url();
@@ -528,7 +604,8 @@ public class YandexCalendarService {
         Matcher matcher = veventPattern.matcher(responseBody);
 
         while (matcher.find()) {
-            String vevent = matcher.group(1);
+            // Разворачиваем «сложенные» строки iCalendar (продолжение начинается с пробела или табуляции)
+            String vevent = matcher.group(1).replaceAll("\\r?\\n[ \\t]", "");
             CalendarEventData event = parseVEvent(vevent);
             if (event != null && event.getUid() != null && !event.getUid().isEmpty()) {
                 events.add(event);
@@ -543,6 +620,7 @@ public class YandexCalendarService {
             String summary = extractField(vevent, "SUMMARY");
             String dtstartRaw = extractField(vevent, "DTSTART");
             String dtendRaw = extractField(vevent, "DTEND");
+            String description = unescapeText(extractField(vevent, "DESCRIPTION"));
 
             boolean isAllDay = false;
             if (dtstartRaw != null && dtstartRaw.contains("VALUE=DATE")) {
@@ -562,6 +640,7 @@ public class YandexCalendarService {
                     .start(start)
                     .end(end)
                     .summary(summary != null ? summary : "")
+                    .description(description)
                     .uid(uid != null ? uid : "")
                     .allDay(isAllDay)
                     .build();
@@ -613,6 +692,16 @@ public class YandexCalendarService {
             log.warn("Ошибка парсинга даты '{}': {}", dateStr, e.getMessage());
         }
         return null;
+    }
+
+    private String unescapeText(String text) {
+        if (text == null || text.isEmpty()) return "";
+        return text
+                .replace("\\n", "\n")
+                .replace("\\N", "\n")
+                .replace("\\,", ",")
+                .replace("\\;", ";")
+                .replace("\\\\", "\\");
     }
 
     private String escapeText(String text) {

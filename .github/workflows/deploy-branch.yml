@@ -1,0 +1,33 @@
+name: Deploy Branch
+
+on:
+  push:
+    branches-ignore:
+      - prod
+  workflow_dispatch: {}
+
+# Один тестовый сервер — параллельные деплои разных веток затопчут друг
+# друга, поэтому новый пуш отменяет ещё не завершённый прогон.
+concurrency:
+  group: deploy-branch
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy branch to Test Server
+        env:
+          HOST: ${{ secrets.SERVER_HOST }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa_test
+          chmod 600 ~/.ssh/id_rsa_test
+
+          ssh -i ~/.ssh/id_rsa_test -o StrictHostKeyChecking=no -p ${{ secrets.SERVER_PORT }} ${{ secrets.SERVER_USER }}@$HOST "sudo -iu deploy bash -c 'cd /home/deploy/double-calendar && docker compose down -v --remove-orphans && docker builder prune -f && git fetch origin && (git checkout $BRANCH || git checkout -b $BRANCH origin/$BRANCH) && git reset --hard origin/$BRANCH && docker compose up -d --build'"
+
+          rm -f ~/.ssh/id_rsa_test
