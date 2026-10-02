@@ -24,10 +24,6 @@ public class MemberBotKeyboardFactory {
         ArrayNode row1 = buttons.addArray();
         addButton(row1, "📅 Посмотреть ближайшие даты", "upcoming", "primary");
 
-        ArrayNode row2 = buttons.addArray();
-        addButton(row2, "🔔 Подписаться", "subscribe", "positive");
-        addButton(row2, "🔕 Отписаться", "unsubscribe", "secondary");
-
         return toJson(keyboard);
     }
 
@@ -40,9 +36,6 @@ public class MemberBotKeyboardFactory {
 
         ArrayNode row1 = buttons.addArray();
         addButton(row1, "📅 Посмотреть ближайшие даты", "upcoming", "primary");
-
-        ArrayNode row2 = buttons.addArray();
-        addButton(row2, "🔕 Отписаться", "unsubscribe", "secondary");
 
         return toJson(keyboard);
     }

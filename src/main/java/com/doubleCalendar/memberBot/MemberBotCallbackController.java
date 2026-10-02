@@ -34,10 +34,13 @@ public class MemberBotCallbackController {
         log.info("📨 Member Bot callback: type={}", type);
 
         if ("confirmation".equals(type)) {
-            return memberConfig.getConfirmationCode();
+            String code = memberConfig.getConfirmationCode();
+            log.info("✅ Member Bot: подтверждение сервера, возвращаю код (длина {})", code == null ? 0 : code.length());
+            return code;
         }
 
         if (!memberConfig.isValid()) {
+            log.warn("❌ Member Bot: получен callback type={}, но бот не настроен (VK_MEMBER_TOKEN/GROUP_ID). Игнорирую.", type);
             return "ok";
         }
 

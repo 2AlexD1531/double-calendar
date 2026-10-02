@@ -11,18 +11,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
 
 /**
- * Хранилище подписчиков уведомлений о брони.
+ * Хранилище получателей уведомлений о брони.
  * <p>
- * Бот закрытый: получают уведомления только те, кто подписался по приглашению.
- * Подписчики хранятся в файле ({@code vk.bot.subscribers-file}, по умолчанию {@code data/vk-subscribers.txt}),
- * поэтому переживают перезапуск приложения.
+ * Получатель добавляется автоматически, когда он пишет боту. Подпиской/отпиской
+ * пользователь управляет нативно в ВК (заблокировать сообщество или отключить его
+ * уведомления). Список хранится в файле {@code vk.member-bot.subscribers-file}
+ * (по умолчанию {@code data/member-bot-subscribers.txt}), поэтому переживает перезапуск.
  */
 @Slf4j
 @Component
@@ -31,7 +31,7 @@ public class MemberSubscriberStore {
 
     private final MemberBotConfig memberConfig;
 
-    /** peerId подписчиков в порядке подписки. */
+    /** peerId получателей в порядке регистрации. */
     private final Set<Integer> subscribers = new LinkedHashSet<>();
 
     @PostConstruct
@@ -40,7 +40,7 @@ public class MemberSubscriberStore {
             subscribers.clear();
             Path path = getFilePath();
             if (path == null || !Files.exists(path)) {
-                log.info("Файл подписчиков не найден: {}", path);
+                log.info("Файл получателей не найден: {}", path);
                 return;
             }
 
@@ -51,22 +51,22 @@ public class MemberSubscriberStore {
                             try {
                                 subscribers.add(Integer.parseInt(line));
                             } catch (NumberFormatException e) {
-                                log.warn("Некорректный peerId в файле подписчиков: {}", line);
+                                log.warn("Некорректный peerId в файле получателей: {}", line);
                             }
                         });
             } catch (IOException e) {
-                log.error("Ошибка чтения файла подписчиков {}: {}", path, e.getMessage());
+                log.error("Ошибка чтения файла получателей {}: {}", path, e.getMessage());
                 return;
             }
 
-            log.info("Загружено подписчиков уведомлений: {}", subscribers.size());
+            log.info("Загружено получателей уведомлений: {}", subscribers.size());
         }
     }
 
     /**
-     * Подписка на уведомления.
+     * Регистрация получателя уведомлений (вызывается при любом входящем сообщении).
      *
-     * @return true, если подписка добавлена; false, если пользователь уже подписан
+     * @return true, если получатель добавлен; false, если он уже был зарегистрирован
      */
     public boolean subscribe(Integer peerId) {
         if (peerId == null) {
@@ -76,59 +76,18 @@ public class MemberSubscriberStore {
             boolean added = subscribers.add(peerId);
             if (added) {
                 save();
-                log.info("✅ Новый подписчик уведомлений: {}", peerId);
+                log.info("✅ Новый получатель уведомлений: {}", peerId);
             }
             return added;
         }
     }
 
     /**
-     * Отписка от уведомлений.
-     *
-     * @return true, если подписка удалена; false, если пользователь не был подписан
-     */
-    public boolean unsubscribe(Integer peerId) {
-        if (peerId == null) {
-            return false;
-        }
-        synchronized (subscribers) {
-            boolean removed = subscribers.remove(peerId);
-            if (removed) {
-                save();
-                log.info("✅ Подписчик отписан: {}", peerId);
-            }
-            return removed;
-        }
-    }
-
-    public boolean isSubscribed(Integer peerId) {
-        if (peerId == null) {
-            return false;
-        }
-        synchronized (subscribers) {
-            return subscribers.contains(peerId);
-        }
-    }
-
-    /**
-     * Список получателей уведомлений: подписчики.
+     * Список получателей уведомлений.
      */
     public List<Integer> getRecipients() {
         synchronized (subscribers) {
             return new ArrayList<>(subscribers);
-        }
-    }
-
-    /**
-     * Список подписчиков без возможности изменения.
-     */
-    public List<Integer> getSubscribers() {
-        return Collections.unmodifiableList(getRecipients());
-    }
-
-    public int count() {
-        synchronized (subscribers) {
-            return subscribers.size();
         }
     }
 
@@ -141,12 +100,12 @@ public class MemberSubscriberStore {
     }
 
     /**
-     * Сохранение подписчиков в файл.
+     * Сохранение получателей в файл.
      */
     private void save() {
         Path path = getFilePath();
         if (path == null) {
-            log.warn("Файл подписчиков не задан, изменения не сохраняются");
+            log.warn("Файл получателей не задан, изменения не сохраняются");
             return;
         }
 
@@ -157,7 +116,7 @@ public class MemberSubscriberStore {
             }
             Files.write(path, subscribers.stream().map(String::valueOf).toList(), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            log.error("Ошибка сохранения файла подписчиков {}: {}", path, e.getMessage());
+            log.error("Ошибка сохранения файла получателей {}: {}", path, e.getMessage());
         }
     }
 }

@@ -1,5 +1,6 @@
 package com.doubleCalendar.memberBot;
 
+import jakarta.annotation.PostConstruct;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -23,7 +24,7 @@ public class MemberBotConfig {
     private String confirmationCode = "";
     private String secretKey = "";
 
-    /** Файл с peerId подписчиков уведомлений. */
+    /** Файл с peerId получателей уведомлений. */
     private String subscribersFile = "data/member-bot-subscribers.txt";
 
     public boolean isValid() {
@@ -39,5 +40,34 @@ public class MemberBotConfig {
         }
 
         return valid;
+    }
+
+    /**
+     * Выводит в лог наглядный итог конфигурации, чтобы сразу было видно, настроен ли бот.
+     */
+    @PostConstruct
+    public void logConfig() {
+        log.info("⚙️ Member Bot: enabled={}, accessToken={}, groupId={}, confirmationCode={}, secretKey={}, subscribersFile={}",
+                enabled,
+                isBlank(accessToken) ? "ОТСУТСТВУЕТ" : "задан (" + mask(accessToken) + ")",
+                groupId,
+                isBlank(confirmationCode) ? "ОТСУТСТВУЕТ" : "задан",
+                isBlank(secretKey) ? "ОТСУТСТВУЕТ (secret не проверяется)" : "задан",
+                subscribersFile);
+
+        if (!isValid()) {
+            log.warn("⚠️ Member Bot НЕ будет отвечать: задайте в .env переменные VK_MEMBER_TOKEN и VK_MEMBER_GROUP_ID (и VK_MEMBER_CONFIRMATION_CODE)");
+        }
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private String mask(String token) {
+        if (token == null || token.length() <= 8) {
+            return "***";
+        }
+        return token.substring(0, 4) + "…" + token.substring(token.length() - 4);
     }
 }

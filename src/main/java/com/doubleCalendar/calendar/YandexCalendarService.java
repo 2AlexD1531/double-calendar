@@ -234,7 +234,7 @@ public class YandexCalendarService {
                 int deletedCount = 0;
                 for (CalendarEventData event2 : eventsFromCalendar2) {
                     String uid2 = event2.getUid();
-                    if (uid2 == null || !uid2.endsWith("-double-calendar-sync")) continue;
+                    if (uid2 == null || !uid2.endsWith(COPY_SUFFIX)) continue;
 
                     String originalUid = restoreOriginalUid(uid2);
 
